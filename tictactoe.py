@@ -2,12 +2,13 @@ import pygame
 import sys
 import math
 import random
-from menu import run_menu  # <-- Make sure menu.py is in the same directory
+from menu import run_menu 
+from ai import get_best_move_iterative, get_priority_moves, check_winner_fast, clear_eval_cache, WIN_CONSEC
 
 # --- Configuration ---
 BOARD_SIZE = 15
 CELL_SIZE = 40
-WIN_LENGTH = 5
+# WIN_LENGTH = 5 # No longer needed here, uses ai.WIN_CONSEC
 SIDE_PANEL_WIDTH = 220
 TOP_UI_HEIGHT = 60
 BOARD_PIXEL = BOARD_SIZE * CELL_SIZE
@@ -50,8 +51,9 @@ players = {
 }
 
 
-# --- Functions ---
+# --- Core Game Functions ---
 def draw_board(hover_pos=None):
+    # ... (Keep this function as is)
     board_left = SIDE_PANEL_WIDTH
     board_top = TOP_UI_HEIGHT
     pygame.draw.rect(screen, BG_COLOR, (board_left, board_top, BOARD_PIXEL, BOARD_PIXEL))
@@ -71,6 +73,7 @@ def draw_board(hover_pos=None):
 
 
 def check_win(x, y, player):
+    # This is a redundant function now, but keep for compatibility with player move
     directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
     for dx, dy in directions:
         count = 1
@@ -80,268 +83,53 @@ def check_win(x, y, player):
                 count += 1
                 nx += dx * dir
                 ny += dy * dir
-        if count >= WIN_LENGTH:
+        if count >= WIN_CONSEC:
             return True
     return False
 
-
+# --- AI Integration (Constants and Function) ---
 AI_PLAYER = "O"
 HUMAN_PLAYER = "X"
-MAX_DEPTH = 3  # adjustable depending on difficulty
-WIN_CONSEC = 5
 
-def ai_move(difficult=0):
-    """AI chooses move based on difficulty."""
-    empty_cells = [(x, y) for y in range(BOARD_SIZE) for x in range(BOARD_SIZE) if board[y][x] == " "]
-    if not empty_cells:
-        return None
-
-    if difficult == 0:
-        # Easy: random
-        return random.choice(empty_cells)
-    elif difficult == 1:
-        # Medium: heuristic only
-        best_score = -math.inf
-        best_move = None
-        for (x, y) in empty_cells:
-            score = evaluate_move(x, y, AI_PLAYER)
-            if score > best_score:
-                best_score = score
-                best_move = (x, y)
-        return best_move
-    else:
-        # Hard: minimax + alpha-beta
-        _, move = minimax(board, MAX_DEPTH, -math.inf, math.inf, True)
-        return move
-
-
-def get_candidate_moves(board, radius=2):
-    """Return all empty cells within a given distance from existing moves."""
-    candidates = set()
-    for y in range(BOARD_SIZE):
-        for x in range(BOARD_SIZE):
-            if board[y][x] != " ":
-                # Explore a square region around this move
-                for dy in range(-radius, radius + 1):
-                    for dx in range(-radius, radius + 1):
-                        nx, ny = x + dx, y + dy
-                        if 0 <= nx < BOARD_SIZE and 0 <= ny < BOARD_SIZE:
-                            if board[ny][nx] == " ":
-                                candidates.add((nx, ny))
-    # If board is empty, fall back to center
-    if not candidates:
-        return [(BOARD_SIZE // 2, BOARD_SIZE // 2)]
-    return list(candidates)
-
-
-# ----------------------- Minimax with Alpha-Beta -----------------------
-# ----------------------- Minimax with Alpha-Beta (CORRECTED) -----------------------
-def minimax(state, depth, alpha, beta, maximizing):
-    """Minimax algorithm with alpha-beta pruning."""
-    # Note: check_winner and is_full must use the passed 'state'
-    winner = check_winner(state)
-    if winner == AI_PLAYER:
-        # AI wins: very high score
-        return (100000, None)
-    elif winner == HUMAN_PLAYER:
-        # Human wins: very low score
-        return (-100000, None)
-    elif depth == 0 or is_full(state):
-        # Depth limit or draw: evaluate current board
-        return (evaluate_board(state), None)
-
-    # Use get_candidate_moves on the current state
-    candidate_moves = get_candidate_moves(state)
-    if not candidate_moves:
-        return (0, None)
-
-    if maximizing:
-        best_score = -math.inf
-        best_move = None
-        
-        for (x, y) in candidate_moves:
-            # 1. Create a deep copy of the current state
-            new_state = [row[:] for row in state]
-            
-            # 2. Make the move on the new state
-            new_state[y][x] = AI_PLAYER
-            
-            # 3. Recurse with the new state
-            score, _ = minimax(new_state, depth - 1, alpha, beta, False)
-            
-            # **Removed:** state[y][x] = " " # No need to unmake if using a copy
-
-            if score > best_score:
-                best_score = score
-                best_move = (x, y)
-            
-            # Alpha-Beta Pruning update (Maximizer tries to raise alpha)
-            alpha = max(alpha, score)
-            if beta <= alpha:
-                break
-        return best_score, best_move
+def ai_move(difficulty=0):
+    """Delegates AI move selection based on difficulty."""
+    if difficulty == 0:
+        # Simple Random Move
+        empty_cells = [(x, y) for y in range(BOARD_SIZE) for x in range(BOARD_SIZE) if board[y][x] == " "]
+        return random.choice(empty_cells) if empty_cells else None
     
-    else: # Minimizing player (HUMAN_PLAYER)
-        best_score = math.inf
-        best_move = None
+    # Minimax based moves
+    if difficulty == 1:
+        # Easy/Medium: Use move ordering and depth 1 search for speed
+        moves = get_priority_moves(board, AI_PLAYER, HUMAN_PLAYER, BOARD_SIZE, max_moves=5)
+        if moves:
+            # Check the best move without full minimax for speed
+            return moves[0]
         
-        for (x, y) in candidate_moves: # **Fix 3:** Use candidate_moves derived from 'state'
-            # 1. Create a deep copy of the current state
-            new_state = [row[:] for row in state]
-            
-            # 2. Make the move on the new state
-            new_state[y][x] = HUMAN_PLAYER
-            
-            # 3. Recurse with the new state
-            score, _ = minimax(new_state, depth - 1, alpha, beta, True)
-            
-            # **Removed:** state[y][x] = " " # No need to unmake if using a copy
+    elif difficulty >= 2:
+        # Hard: Use iterative deepening minimax (up to 4 seconds, max depth 6)
+        # We pass the board by reference (mutating is fine since minimax_optimized handles unmaking moves)
+        return get_best_move_iterative(
+            board, AI_PLAYER, HUMAN_PLAYER, BOARD_SIZE, 
+            max_time=4.0 if difficulty == 3 else 2.0, 
+            max_depth=6 if difficulty == 3 else 4
+        )
+    
+    # Fallback
+    empty_cells = [(x, y) for y in range(BOARD_SIZE) for x in range(BOARD_SIZE) if board[y][x] == " "]
+    return random.choice(empty_cells) if empty_cells else None
 
-            if score < best_score:
-                best_score = score
-                best_move = (x, y)
-            
-            # Alpha-Beta Pruning update (Minimizer tries to lower beta)
-            beta = min(beta, score)
-            if beta <= alpha:
-                break
-        return best_score, best_move
+# ----------------------- REMOVED MINIMAX AND HEURISTIC FUNCTIONS -----------------------
+# The following functions have been moved to ai.py and are now imported or replaced:
+# * get_candidate_moves
+# * minimax (replaced by minimax_optimized logic in ai.py)
+# * is_full (moved to ai.py)
+# * check_winner (replaced by check_winner_fast in ai.py)
+# * evaluate_board (moved to ai.py)
+# * ... and all other evaluation/priority helpers
 
-
-# ----------------------- Heuristic Evaluation -----------------------
-def evaluate_board(state):
-    """Evaluate the full board heuristically."""
-    score = 0
-    for y in range(BOARD_SIZE):
-        for x in range(BOARD_SIZE):
-            if state[y][x] == AI_PLAYER:
-                score += evaluate_move(x, y, AI_PLAYER)
-            elif state[y][x] == HUMAN_PLAYER:
-                score -= evaluate_move(x, y, HUMAN_PLAYER)
-    return score
-
-
-def evaluate_move(x, y, player):
-    """Heuristic for a move based on consecutive pieces and blocking."""
-    opponent = HUMAN_PLAYER if player == AI_PLAYER else AI_PLAYER
-    directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
-    score = 0
-
-    for dx, dy in directions:
-        count = 1
-        open_ends = 0
-
-        # forward
-        nx, ny = x + dx, y + dy
-        while 0 <= nx < BOARD_SIZE and 0 <= ny < BOARD_SIZE and board[ny][nx] == player:
-            count += 1
-            nx += dx
-            ny += dy
-        if 0 <= nx < BOARD_SIZE and 0 <= ny < BOARD_SIZE and board[ny][nx] == " ":
-            open_ends += 1
-
-        # backward
-        nx, ny = x - dx, y - dy
-        while 0 <= nx < BOARD_SIZE and 0 <= ny < BOARD_SIZE and board[ny][nx] == player:
-            count += 1
-            nx -= dx
-            ny -= dy
-        if 0 <= nx < BOARD_SIZE and 0 <= ny < BOARD_SIZE and board[ny][nx] == " ":
-            open_ends += 1
-
-        # scoring logic (more aggressive for near-wins)
-        if count >= WIN_CONSEC:
-            score += 100000
-        elif count == 4 and open_ends > 0:
-            score += 5000
-        elif count == 3 and open_ends > 0:
-            score += 500
-        elif count == 2 and open_ends > 0:
-            score += 50
-        elif count == 1 and open_ends > 0:
-            score += 10
-
-    return score
-
-
-# ----------------------- Helper Functions -----------------------
-def is_full(state):
-    return all(cell != " " for row in state for cell in row)
-
-
-def check_winner(state):
-    """Return 'X' or 'O' if either has 5 in a row, else None."""
-    for y in range(BOARD_SIZE):
-        for x in range(BOARD_SIZE):
-            if state[y][x] == " ":
-                continue
-            player = state[y][x]
-            for dx, dy in [(1, 0), (0, 1), (1, 1), (1, -1)]:
-                if all(
-                    0 <= x + i * dx < BOARD_SIZE and
-                    0 <= y + i * dy < BOARD_SIZE and
-                    state[y + i * dy][x + i * dx] == player
-                    for i in range(WIN_CONSEC)
-                ):
-                    return player
-    return None
-
-
-def evaluate_move(x, y, player):
-    """Heuristic utility evaluation for a given move."""
-    opponent = "X" if player == "O" else "O"
-
-    # Temporarily make move
-    board[y][x] = player
-    my_score = count_potential(x, y, player)
-    board[y][x] = opponent
-    opp_score = count_potential(x, y, opponent)
-    board[y][x] = " "  # revert
-
-    # Distance bonus: prefer moves near existing pieces
-    proximity = proximity_score(x, y)
-
-    # Final weighted score
-    return my_score * 2 + opp_score * 1.5 + proximity * 0.5
-
-
-def count_potential(x, y, player):
-    """Count how strong a move is based on connected stones."""
-    directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
-    total = 0
-    for dx, dy in directions:
-        count = 1  # the current cell
-        for dir in [1, -1]:
-            nx, ny = x + dx * dir, y + dy * dir
-            while 0 <= nx < BOARD_SIZE and 0 <= ny < BOARD_SIZE and board[ny][nx] == player:
-                count += 1
-                nx += dx * dir
-                ny += dy * dir
-        total += count ** 2  # higher weight for longer lines
-    return total
-
-
-def proximity_score(x, y):
-    """Encourage moves closer to existing stones."""
-    nearby_bonus = 0
-    for dy in range(-2, 3):
-        for dx in range(-2, 3):
-            nx, ny = x + dx, y + dy
-            if 0 <= nx < BOARD_SIZE and 0 <= ny < BOARD_SIZE and board[ny][nx] != " ":
-                nearby_bonus += 1 / (1 + abs(dx) + abs(dy))
-    return nearby_bonus
-
-
-# def ai_take_turn():
-#     move = random_ai_move()
-#     if move:
-#         x, y = move
-#         board[y][x] = "O"
-#         if check_win(x, y, "O"):
-#             players["O"]["points"] += 1
-#             return True, "O"
-#     return False, None
-
+# --- UI Functions ---
+# ... (Keep all UI functions like draw_player_panel, draw_top_ui, show_popup, show_pause_popup as is)
 
 def draw_player_panel(side, player_symbol):
     data = players[player_symbol]
@@ -426,10 +214,9 @@ def show_pause_popup():
 
 # --- Game loop ---
 def run_game(vs_ai=False, saved_state=None, difficult=0):
-    import random
     global board, current_player, game_over, popup_active, pause_active, winner
 
-    # Restore from saved state if exists
+    # ... (Keep game state setup as is)
     if saved_state:
         board = saved_state["board"]
         current_player = saved_state["current_player"]
@@ -445,7 +232,7 @@ def run_game(vs_ai=False, saved_state=None, difficult=0):
         popup_active = False
         pause_active = False
         winner = None
-    
+
     if vs_ai:
         players["O"]["name"] = "Computer"
     else:
@@ -453,6 +240,7 @@ def run_game(vs_ai=False, saved_state=None, difficult=0):
 
     clock = pygame.time.Clock()
     running = True
+    ai_should_move = False 
 
     while running:
         mouse_pos = pygame.mouse.get_pos()
@@ -472,23 +260,41 @@ def run_game(vs_ai=False, saved_state=None, difficult=0):
         elif pause_active:
             cont_rect, menu_rect = show_pause_popup()
 
+        # --- AI TURN ---
+        if vs_ai and ai_should_move and not game_over:
+            pygame.display.flip()       # Update before thinking
+            pygame.time.wait(200)       # Small pause for realism
+            
+            # Reset cache before AI search starts
+            clear_eval_cache()
+            
+            move = ai_move(difficulty=difficult)
+            if move:
+                x, y = move
+                board[y][x] = "O"
+                if check_win(x, y, "O"):
+                    players["O"]["points"] += 1
+                    game_over = True
+                    popup_active = True
+                    winner = "O"
+                else:
+                    current_player = "X"
+            ai_should_move = False      # Reset flag
+
         # --- Event Handling ---
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
 
-            # --- Winner popup ---
             if popup_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if continue_rect.collidepoint(event.pos):
-                    # Reset after win
                     board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
                     current_player = "X"
                     game_over = False
                     popup_active = False
                     winner = None
 
-            # --- Pause popup ---
             elif pause_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if cont_rect.collidepoint(event.pos):
                     pause_active = False
@@ -501,7 +307,6 @@ def run_game(vs_ai=False, saved_state=None, difficult=0):
                     }
                     return ("menu", saved_state)
 
-            # --- Main interactions ---
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if pause_rect.collidepoint(event.pos):
                     pause_active = True
@@ -518,35 +323,10 @@ def run_game(vs_ai=False, saved_state=None, difficult=0):
                             popup_active = True
                             winner = "X"
                         else:
-                            current_player = "O" if vs_ai else "O" if current_player == "X" else "X"
-
-                            if vs_ai and current_player == "O" and not game_over:
-                                move = ai_move(difficult=difficult)
-                                if move:
-                                    x, y = move
-                                    board[y][x] = "O"
-                                    if check_win(x, y, "O"):
-                                        players["O"]["points"] += 1
-                                        game_over = True
-                                        popup_active = True
-                                        winner = "O"
-                                    else:
-                                        current_player = "X"
-
-        # --- AI Turn ---
-        if vs_ai and not game_over and not popup_active and current_player == "O":
-            pygame.time.delay(300)  # small delay for realism
-            empty_cells = [(x, y) for y in range(BOARD_SIZE) for x in range(BOARD_SIZE) if board[y][x] == " "]
-            if empty_cells:
-                x, y = random.choice(empty_cells)
-                board[y][x] = "O"
-                if check_win(x, y, "O"):
-                    players["O"]["points"] += 1
-                    game_over = True
-                    popup_active = True
-                    winner = "O"
-                else:
-                    current_player = "X"
+                            current_player = "O"
+                            if vs_ai:
+                                ai_should_move = True  # Defer AI turn to next loop
+                        pygame.display.flip()
 
         pygame.display.flip()
         clock.tick(60)
@@ -560,30 +340,25 @@ if __name__ == "__main__":
     while True:
         menu_choice = run_menu(in_progress=in_progress)
 
+        # Logic for running the game based on menu choice
         if isinstance(menu_choice, tuple) and menu_choice[0] == "ai":
             difficulty = menu_choice[1]
             result = run_game(vs_ai=True, difficult=difficulty)
-            if isinstance(result, tuple) and result[0] == "menu":
-                in_progress = True
-                saved_state = result[1]
-                continue
-            else:
-                in_progress = False
         elif menu_choice == "pvp":
             result = run_game(vs_ai=False)
-            if isinstance(result, tuple) and result[0] == "menu":
-                in_progress = True
-                saved_state = result[1]
-                continue
-            else:
-                in_progress = False
         elif menu_choice == "continue" and saved_state:
-            result = run_game(saved_state)
-            if isinstance(result, tuple) and result[0] == "menu":
-                in_progress = True
-                saved_state = result[1]
-                continue
-            else:
-                in_progress = False
+            # Check if vs_ai was enabled in the saved state (simple check based on Player 2 name)
+            vs_ai_setting = players.get("O", {}).get("name") == "Computer"
+            # Since difficulty isn't saved, we default to the highest if it was an AI game
+            difficulty_setting = 3 if vs_ai_setting else 0 
+            
+            result = run_game(vs_ai=vs_ai_setting, saved_state=saved_state, difficult=difficulty_setting)
         else:
             break
+
+        # Logic for returning to menu
+        if isinstance(result, tuple) and result[0] == "menu":
+            in_progress = True
+            saved_state = result[1]
+        else:
+            in_progress = False
