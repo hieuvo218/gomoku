@@ -28,8 +28,12 @@ settings = {
 }
 
 # --- Menu State ---
-menu_state = "main"  # "main", "settings", "howto", "mode_select", "difficulty_select"
+menu_state = "main"  # "main", "settings", "howto", "mode_select", "difficulty_select", "symbol_select"
 game_in_progress = False
+
+# --- Global Variable to track chosen symbol for AI mode ---
+selected_mode = None
+selected_symbol_for_game = "X"
 
 
 # --- Utility Functions ---
@@ -109,6 +113,24 @@ def mode_select_menu():
     }
 
 
+# --- New Screen: Symbol Selection ---
+def symbol_select_menu():
+    """Choose which symbol ('X' or 'O') the human player will use."""
+    screen.fill(BG_COLOR)
+    draw_text_center("Choose Your Symbol", title_font, TITLE_COLOR, screen, 120)
+    draw_text_center("(X goes first, O goes second)", info_font, TEXT_COLOR, screen, 180)
+
+    x_btn = draw_button("Play as X (Go First)", 280)
+    o_btn = draw_button("Play as O (Go Second)", 360)
+    back_btn = draw_button("Back", 500)
+
+    return {
+        "x": x_btn,
+        "o": o_btn,
+        "back": back_btn
+    }
+
+
 def settings_menu():
     screen.fill(BG_COLOR)
     draw_text_center("Settings", title_font, TITLE_COLOR, screen, 100)
@@ -151,7 +173,7 @@ def how_to_play_menu():
 
 # --- Main Menu Loop ---
 def run_menu(in_progress=False):
-    global menu_state, game_in_progress
+    global menu_state, game_in_progress, selected_mode, selected_symbol_for_game
     game_in_progress = in_progress
     clock = pygame.time.Clock()
 
@@ -167,6 +189,8 @@ def run_menu(in_progress=False):
             buttons = how_to_play_menu()
         elif menu_state == "mode_select":
             buttons = mode_select_menu()
+        elif menu_state == "symbol_select":
+            buttons = symbol_select_menu()
         elif menu_state == "difficulty_select":
             buttons = difficulty_menu()
 
@@ -176,11 +200,13 @@ def run_menu(in_progress=False):
                 pygame.quit()
                 sys.exit()
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+
                 if menu_state == "main":
                     if buttons["continue"].collidepoint(event.pos) and game_in_progress:
                         return "continue"
                     elif buttons["new"].collidepoint(event.pos):
                         menu_state = "mode_select"
+                    # ... (rest of main menu logic)
                     elif buttons["settings"].collidepoint(event.pos):
                         menu_state = "settings"
                     elif buttons["howto"].collidepoint(event.pos):
@@ -190,6 +216,7 @@ def run_menu(in_progress=False):
                         sys.exit()
 
                 elif menu_state == "settings":
+                    # ... (settings logic)
                     if buttons["sfx"].collidepoint(event.pos):
                         settings["sfx"] = not settings["sfx"]
                     elif buttons["music"].collidepoint(event.pos):
@@ -203,21 +230,45 @@ def run_menu(in_progress=False):
 
                 elif menu_state == "mode_select":
                     if buttons["pvp"].collidepoint(event.pos):
-                        return "pvp"
+                        selected_mode = "pvp"
+                        menu_state = "symbol_select" # Go to symbol select for PvP
                     elif buttons["ai"].collidepoint(event.pos):
-                        menu_state = "difficulty_select"  # ✅ FIXED: go to difficulty selection
+                        selected_mode = "ai"
+                        menu_state = "symbol_select" # Go to symbol select for AI
                     elif buttons["back"].collidepoint(event.pos):
                         menu_state = "main"
 
-                elif menu_state == "difficulty_select":
-                    if buttons["easy"].collidepoint(event.pos):
-                        return ("ai", 0)
-                    elif buttons["normal"].collidepoint(event.pos):
-                        return ("ai", 1)
-                    elif buttons["hard"].collidepoint(event.pos):
-                        return ("ai", 2)
+                elif menu_state == "symbol_select":
+                    if buttons["x"].collidepoint(event.pos):
+                        selected_symbol_for_game = "X"
+                        if selected_mode == "pvp":
+                            return ("pvp", "X"), settings
+                        elif selected_mode == "ai":
+                            menu_state = "difficulty_select" # Next for AI
+                    elif buttons["o"].collidepoint(event.pos):
+                        selected_symbol_for_game = "O"
+                        if selected_mode == "pvp":
+                            return ("pvp", "O"), settings
+                        elif selected_mode == "ai":
+                            menu_state = "difficulty_select" # Next for AI
                     elif buttons["back"].collidepoint(event.pos):
                         menu_state = "mode_select"
+
+                elif menu_state == "difficulty_select":
+                    # Return (mode, symbol, difficulty)
+                    difficulty = -1
+                    if buttons["easy"].collidepoint(event.pos):
+                        difficulty = 0
+                    elif buttons["normal"].collidepoint(event.pos):
+                        difficulty = 1
+                    elif buttons["hard"].collidepoint(event.pos):
+                        difficulty = 2
+
+                    if difficulty != -1:
+                        # Return mode, the human player's chosen symbol, and difficulty level
+                        return ("ai", selected_symbol_for_game, difficulty), settings
+                    elif buttons["back"].collidepoint(event.pos):
+                        menu_state = "symbol_select"
 
         pygame.display.flip()
         clock.tick(60)
