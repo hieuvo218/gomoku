@@ -179,14 +179,6 @@ def ai_move(difficulty=0):
     empty_cells = [(x, y) for y in range(BOARD_SIZE) for x in range(BOARD_SIZE) if board[y][x] == " "]
     return random.choice(empty_cells) if empty_cells else None
 
-# ----------------------- REMOVED MINIMAX AND HEURISTIC FUNCTIONS -----------------------
-# The following functions have been moved to ai.py and are now imported or replaced:
-# * get_candidate_moves
-# * minimax (replaced by minimax_optimized logic in ai.py)
-# * is_full (moved to ai.py)
-# * check_winner (replaced by check_winner_fast in ai.py)
-# * evaluate_board (moved to ai.py)
-# * ... and all other evaluation/priority helpers
 
 # --- UI Functions ---
 def format_time(seconds):
