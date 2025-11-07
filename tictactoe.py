@@ -1,8 +1,11 @@
-import pygame
 import sys
 import math
 import random
 import os
+
+import pygame
+
+from network import NetworkGame
 from menu import run_menu 
 from ai import get_best_move_iterative, get_priority_moves, check_winner_fast, clear_eval_cache, WIN_CONSEC
 
