@@ -52,6 +52,7 @@ missing module named pkg_resources.extern.appdirs - imported by pkg_resources.ex
 missing module named 'pkg_resources.extern.jaraco' - imported by pkg_resources (top-level), pkg_resources._vendor.jaraco.text (top-level)
 missing module named vms_lib - imported by platform (delayed, optional)
 missing module named java - imported by platform (delayed)
+missing module named pygame_textinput - imported by menu (delayed)
 missing module named OpenGL - imported by pygame (delayed)
 missing module named dummy_threading - imported by psutil._compat (optional)
 missing module named _dummy_thread - imported by numpy.core.arrayprint (optional)

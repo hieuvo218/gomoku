@@ -102,15 +102,20 @@ def mode_select_menu():
     screen.fill(BG_COLOR)
     draw_text_center("Select Game Mode", title_font, TITLE_COLOR, screen, 120)
 
-    pvp_btn = draw_button("Player vs Player", 260)
-    ai_btn = draw_button("Player vs Computer", 340)
-    back_btn = draw_button("Back", 460)
+    pvp_btn = draw_button("Player vs Player (Local)", 220)
+    ai_btn = draw_button("Player vs Computer", 300)
+    host_btn = draw_button("Host Online Game", 380)
+    join_btn = draw_button("Join Online Game", 460)
+    back_btn = draw_button("Back", 540)
 
     return {
         "pvp": pvp_btn,
         "ai": ai_btn,
+        "host": host_btn,
+        "join": join_btn,
         "back": back_btn
     }
+
 
 
 # --- New Screen: Symbol Selection ---
@@ -129,6 +134,49 @@ def symbol_select_menu():
         "o": o_btn,
         "back": back_btn
     }
+
+
+def host_join_menu():
+    """Screen for joining a host by entering IP address."""
+    import pygame_textinput
+    screen.fill(BG_COLOR)
+    draw_text_center("Join Game", title_font, TITLE_COLOR, screen, 100)
+    draw_text_center("Enter Host IP:", info_font, TEXT_COLOR, screen, 200)
+
+    # --- Input box setup ---
+    textinput = pygame_textinput.TextInputVisualizer(font=button_font, cursor_color=(0, 0, 0))
+    back_btn = draw_button("Back", 480)
+    join_btn = draw_button("Connect", 400)
+
+    clock = pygame.time.Clock()
+    user_ip = ""
+
+    while True:
+        screen.fill(BG_COLOR)
+        draw_text_center("Join Game", title_font, TITLE_COLOR, screen, 100)
+        draw_text_center("Enter Host IP:", info_font, TEXT_COLOR, screen, 200)
+
+        events = pygame.event.get()
+        for event in events:
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if back_btn.collidepoint(event.pos):
+                    return None  # Return to previous menu
+                elif join_btn.collidepoint(event.pos):
+                    return user_ip.strip()
+
+        textinput.update(events)
+        user_ip = textinput.value
+        screen.blit(textinput.surface, (WIDTH // 2 - 100, 280))
+
+        back_btn = draw_button("Back", 480)
+        join_btn = draw_button("Connect", 400)
+
+        pygame.display.flip()
+        clock.tick(30)
+
 
 
 def settings_menu():
@@ -231,12 +279,21 @@ def run_menu(in_progress=False):
                 elif menu_state == "mode_select":
                     if buttons["pvp"].collidepoint(event.pos):
                         selected_mode = "pvp"
-                        menu_state = "symbol_select" # Go to symbol select for PvP
+                        menu_state = "symbol_select"
                     elif buttons["ai"].collidepoint(event.pos):
                         selected_mode = "ai"
-                        menu_state = "symbol_select" # Go to symbol select for AI
+                        menu_state = "symbol_select"
+                    elif buttons["host"].collidepoint(event.pos):
+                        # Host game mode selected
+                        return ("host_online", "X"), settings  # Host always starts as X
+                    elif buttons["join"].collidepoint(event.pos):
+                        # Ask for IP
+                        ip = host_join_menu()
+                        if ip:
+                            return ("join_online", "O", ip), settings  # Joining player is O
                     elif buttons["back"].collidepoint(event.pos):
                         menu_state = "main"
+
 
                 elif menu_state == "symbol_select":
                     if buttons["x"].collidepoint(event.pos):

@@ -309,6 +309,7 @@ def run_game(vs_ai=False, saved_state=None, difficult=0, human_symbol="X", game_
     # Determine the AI player symbol based on the human choice
     AI_PLAYER = "O" if human_symbol == "X" else "X"
     HUMAN_PLAYER = human_symbol
+    start_symbol = "X"
     
     # --- Initialization ---
     if saved_state:
@@ -336,7 +337,7 @@ def run_game(vs_ai=False, saved_state=None, difficult=0, human_symbol="X", game_
         players["O"]["time_left"] = 300
         
         # Set initial current player based on standard rules (X goes first)
-        current_player = "X" 
+        current_player = start_symbol 
         if vs_ai:
             players[AI_PLAYER]["name"] = "Computer"
             players[HUMAN_PLAYER]["name"] = "Player"
@@ -460,13 +461,8 @@ def run_game(vs_ai=False, saved_state=None, difficult=0, human_symbol="X", game_
                     if not vs_ai:
                         # If the previous round started with 'X', the next round starts with 'O'
                         # and vice versa. We swap the symbol that goes first.
-                        human_symbol = "O" if human_symbol == "X" else "X"
-                        if human_symbol == "X":
-                            players["X"]["name"] = f"Player 1 (X)"
-                            players["O"]["name"] = "Player 2 (O)"
-                        else:
-                            players["X"]["name"] = f"Player 2 (X)"
-                            players["O"]["name"] = "Player 1 (O)"
+                        start_symbol = "O" if start_symbol == "X" else "X"
+                        current_player = start_symbol
                     else:
                         # In AI mode, 'X' always starts the next round (or whoever is HUMAN_PLAYER)
                         current_player = HUMAN_PLAYER
@@ -528,6 +524,335 @@ def run_game(vs_ai=False, saved_state=None, difficult=0, human_symbol="X", game_
         clock.tick(60)
 
 
+def run_game_ai(saved_state=None, difficult=0, human_symbol="X", game_settings=None):
+    """
+    Play vs AI. human_symbol is "X" or "O". game_settings is a dict { 'sfx': bool, 'music': bool }.
+    """
+    global board, current_player, game_over, popup_active, pause_active, winner, ai_is_thinking, HUMAN_PLAYER, AI_PLAYER
+    start_symbol = "X"
+
+    if game_settings is None:
+        game_settings = {"sfx": True, "music": True}
+
+    # assign dynamic symbols
+    HUMAN_PLAYER = human_symbol
+    AI_PLAYER = "O" if HUMAN_PLAYER == "X" else "X"
+
+    # --- Restore or new game setup ---
+    if saved_state:
+        board = [row[:] for row in saved_state["board"]]
+        current_player = saved_state["current_player"]
+        players.update(saved_state["players"])
+        game_over = saved_state["game_over"]
+        popup_active = False
+        pause_active = False
+        winner = None
+    else:
+        board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+        current_player = "X"  # X starts by default
+        game_over = False
+        popup_active = False
+        pause_active = False
+        winner = None
+        players["X"]["time_left"] = 300
+        players["O"]["time_left"] = 300
+        players["X"]["name"] = "Player"
+        players["O"]["name"] = "Computer"
+
+    # start/restore music
+    if game_settings.get("music", True):
+        toggle_music(game_settings)
+
+    clock = pygame.time.Clock()
+    running = True
+    ai_should_move = False
+    ai_is_thinking = False
+    last_tick_time = pygame.time.get_ticks()
+
+
+    while running:
+        # If AI should move first (human chose O)
+        if current_player == AI_PLAYER:
+            ai_should_move = True
+        # --- Time (delta) ---
+        now = pygame.time.get_ticks()
+        dt = (now - last_tick_time) / 1000.0
+        last_tick_time = now
+
+        # pause music when popup/pause
+        if pause_active or popup_active:
+            if pygame.mixer.music.get_busy():
+                pygame.mixer.music.pause()
+        elif game_settings.get("music", True) and not pygame.mixer.music.get_busy():
+            pygame.mixer.music.unpause()
+
+        # --- Timer countdown (only for human when appropriate) ---
+        if not game_over and not popup_active and not pause_active and not ai_is_thinking:
+            # only decrement the current player's timer; if it's AI's turn, don't subtract human's time
+            if current_player in players:
+                # in AI mode we only decrement human's timer when it's their turn
+                if (current_player == HUMAN_PLAYER) or (current_player != AI_PLAYER and not True):
+                    players[current_player]["time_left"] = max(0, players[current_player]["time_left"] - dt)
+                    if players[current_player]["time_left"] <= 0:
+                        # human ran out of time -> AI wins
+                        game_over = True
+                        popup_active = True
+                        winner = AI_PLAYER
+                        players[winner]["points"] += 1
+
+        # --- Draw UI ---
+        mouse_pos = pygame.mouse.get_pos()
+        hover_cell = None
+        if SIDE_PANEL_WIDTH < mouse_pos[0] < SIDE_PANEL_WIDTH + BOARD_PIXEL and mouse_pos[1] > TOP_UI_HEIGHT:
+            hover_cell = ((mouse_pos[0] - SIDE_PANEL_WIDTH) // CELL_SIZE,
+                          (mouse_pos[1] - TOP_UI_HEIGHT) // CELL_SIZE)
+
+        screen.fill(BG_COLOR)
+        pause_rect, exit_rect = draw_top_ui(mouse_pos)
+        # left panel should show the human_symbol
+        draw_player_panel("left", HUMAN_PLAYER)
+        draw_player_panel("right", AI_PLAYER)
+        draw_board(hover_cell)
+
+        if popup_active:
+            continue_rect = show_popup(winner)
+        elif pause_active:
+            cont_rect, menu_rect = show_pause_popup()
+
+        # --- AI logic (deferred to main loop so UI updates before compute) ---
+        if ai_should_move and not game_over:
+            ai_is_thinking = True
+            pygame.display.flip()
+            pygame.time.wait(150)  # small breathing room
+
+            clear_eval_cache()
+            move = ai_move(difficulty=difficult)
+            ai_is_thinking = False
+
+            if move:
+                mx, my = move
+                board[my][mx] = AI_PLAYER
+                if check_win(mx, my, AI_PLAYER):
+                    players[AI_PLAYER]["points"] += 1
+                    game_over = True
+                    popup_active = True
+                    winner = AI_PLAYER
+                    if game_settings.get("sfx", True):
+                        play_sfx("win", game_settings)
+                else:
+                    current_player = HUMAN_PLAYER
+            ai_should_move = False
+
+        # --- Event handling ---
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                if game_settings.get("music", True):
+                    stop_music()
+                pygame.quit()
+                sys.exit()
+
+            if popup_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if continue_rect.collidepoint(event.pos):
+                    # reset for next round — keep human/ai symbols stable
+                    board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+                    game_over = False
+                    popup_active = False
+                    winner = None
+                    start_symbol = "O" if start_symbol == "X" else "X"
+                    current_player = start_symbol
+                    ai_should_move = False
+                    players["X"]["time_left"] = 300
+                    players["O"]["time_left"] = 300
+
+            elif pause_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if cont_rect.collidepoint(event.pos):
+                    pause_active = False
+                elif menu_rect.collidepoint(event.pos):
+                    if game_settings.get("music", True):
+                        stop_music()
+                    saved_state = {
+                        "board": [row[:] for row in board],
+                        "current_player": current_player,
+                        "players": {p: data.copy() for p, data in players.items()},
+                        "game_over": game_over,
+                    }
+                    return ("menu", saved_state)
+
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if pause_rect.collidepoint(event.pos):
+                    pause_active = True
+                elif exit_rect.collidepoint(event.pos):
+                    if game_settings.get("music", True):
+                        stop_music()
+                    pygame.quit()
+                    sys.exit()
+                elif not game_over and not popup_active and not pause_active and hover_cell:
+                    x, y = hover_cell
+                    # Only allow human to play on their turns
+                    if board[y][x] == " " and current_player == HUMAN_PLAYER:
+                        board[y][x] = HUMAN_PLAYER
+                        if game_settings.get("sfx", True):
+                            play_sfx("place", game_settings)
+                        if check_win(x, y, HUMAN_PLAYER):
+                            players[HUMAN_PLAYER]["points"] += 1
+                            game_over = True
+                            popup_active = True
+                            winner = HUMAN_PLAYER
+                            if game_settings.get("sfx", True):
+                                play_sfx("win", game_settings)
+                        else:
+                            current_player = AI_PLAYER
+                            ai_should_move = True  # AI will move next
+
+        pygame.display.flip()
+        clock.tick(60)
+
+
+def run_game_pvp(saved_state=None, human_symbol="X", game_settings=None):
+    """
+    Two players on the same computer. human_symbol is the symbol to display on the left panel (informational).
+    game_settings controls SFX/music (used if you want sounds in PvP).
+    """
+    global board, current_player, game_over, popup_active, pause_active, winner
+    start_symbol = "X"
+
+    if game_settings is None:
+        game_settings = {"sfx": True, "music": True}
+
+    # initialize or restore
+    if saved_state:
+        board = [row[:] for row in saved_state["board"]]
+        current_player = saved_state["current_player"]
+        players.update(saved_state["players"])
+        game_over = saved_state["game_over"]
+        popup_active = False
+        pause_active = False
+        winner = None
+    else:
+        board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+        current_player = start_symbol
+        game_over = False
+        popup_active = False
+        pause_active = False
+        winner = None
+        players["X"]["time_left"] = 300
+        players["O"]["time_left"] = 300
+        # set display names
+        players["X"]["name"] = "Player 1 (X)" if human_symbol == "X" else "Player 2 (X)"
+        players["O"]["name"] = "Player 2 (O)" if human_symbol == "X" else "Player 1 (O)"
+
+    # music
+    if game_settings.get("music", True):
+        toggle_music(game_settings)
+
+    clock = pygame.time.Clock()
+    running = True
+    last_tick_time = pygame.time.get_ticks()
+
+    while running:
+        # --- Time delta ---
+        now = pygame.time.get_ticks()
+        dt = (now - last_tick_time) / 1000.0
+        last_tick_time = now
+
+        # pause/unpause music
+        if pause_active or popup_active:
+            if pygame.mixer.music.get_busy():
+                pygame.mixer.music.pause()
+        elif game_settings.get("music", True) and not pygame.mixer.music.get_busy():
+            pygame.mixer.music.unpause()
+
+        # --- Timer countdown for current player ---
+        if not game_over and not popup_active and not pause_active:
+            if current_player in players:
+                players[current_player]["time_left"] = max(0, players[current_player]["time_left"] - dt)
+                if players[current_player]["time_left"] <= 0:
+                    game_over = True
+                    popup_active = True
+                    winner = "O" if current_player == "X" else "X"
+                    players[winner]["points"] += 1
+
+        # --- Draw UI ---
+        mouse_pos = pygame.mouse.get_pos()
+        hover_cell = None
+        if SIDE_PANEL_WIDTH < mouse_pos[0] < SIDE_PANEL_WIDTH + BOARD_PIXEL and mouse_pos[1] > TOP_UI_HEIGHT:
+            hover_cell = ((mouse_pos[0] - SIDE_PANEL_WIDTH) // CELL_SIZE,
+                          (mouse_pos[1] - TOP_UI_HEIGHT) // CELL_SIZE)
+
+        screen.fill(BG_COLOR)
+        pause_rect, exit_rect = draw_top_ui(mouse_pos)
+        # left panel shows the player assigned to human_symbol for clarity
+        draw_player_panel("left", human_symbol)
+        draw_player_panel("right", "O" if human_symbol == "X" else "X")
+        draw_board(hover_cell)
+
+        if popup_active:
+            continue_rect = show_popup(winner)
+        elif pause_active:
+            cont_rect, menu_rect = show_pause_popup()
+
+        # --- Events ---
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                if game_settings.get("music", True):
+                    stop_music()
+                pygame.quit()
+                sys.exit()
+
+            if popup_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if continue_rect.collidepoint(event.pos):
+                    board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+                    start_symbol = "O" if start_symbol == "X" else "X"
+                    current_player = start_symbol
+                    game_over = False
+                    popup_active = False
+                    winner = None
+                    players["X"]["time_left"] = 300
+                    players["O"]["time_left"] = 300
+
+            elif pause_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if cont_rect.collidepoint(event.pos):
+                    pause_active = False
+                elif menu_rect.collidepoint(event.pos):
+                    if game_settings.get("music", True):
+                        stop_music()
+                    saved_state = {
+                        "board": [row[:] for row in board],
+                        "current_player": current_player,
+                        "players": {p: data.copy() for p, data in players.items()},
+                        "game_over": game_over,
+                    }
+                    return ("menu", saved_state)
+
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if pause_rect.collidepoint(event.pos):
+                    pause_active = True
+                elif exit_rect.collidepoint(event.pos):
+                    if game_settings.get("music", True):
+                        stop_music()
+                    pygame.quit()
+                    sys.exit()
+                elif not game_over and not popup_active and not pause_active and hover_cell:
+                    x, y = hover_cell
+                    if board[y][x] == " ":
+                        board[y][x] = current_player
+                        if game_settings.get("sfx", True):
+                            play_sfx("place", game_settings)
+                        if check_win(x, y, current_player):
+                            players[current_player]["points"] += 1
+                            game_over = True
+                            popup_active = True
+                            winner = current_player
+                            if game_settings.get("sfx", True):
+                                play_sfx("win", game_settings)
+                            
+                        else:
+                            current_player = "O" if current_player == "X" else "X"
+
+        pygame.display.flip()
+        clock.tick(60)
+
+
 # --- Entry Point ---
 if __name__ == "__main__":
     saved_state = None
@@ -545,7 +870,6 @@ if __name__ == "__main__":
 
     while True:
         menu_choice = run_menu(in_progress=in_progress)
-        print(menu_choice)
 
         # After returning from menu, re-apply the music setting if it changed
 
@@ -567,8 +891,7 @@ if __name__ == "__main__":
                 last_human_symbol = menu_choice[1]
                 last_difficulty = menu_choice[2]
                 
-                result = run_game(
-                    vs_ai=True, 
+                result = run_game_ai(
                     human_symbol=last_human_symbol, 
                     difficult=last_difficulty,
                     game_settings=settings
@@ -581,8 +904,7 @@ if __name__ == "__main__":
                 last_difficulty = 0
                 
                 # The human_symbol determines who starts, but in PvP both are human
-                result = run_game(
-                    vs_ai=False, 
+                result = run_game_pvp( 
                     human_symbol=last_human_symbol,
                     game_settings=settings # 'X' or 'O' used to set Player 1/2 names correctly
                 )
