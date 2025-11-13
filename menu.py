@@ -34,6 +34,7 @@ game_in_progress = False
 # --- Global Variable to track chosen symbol for AI mode ---
 selected_mode = None
 selected_symbol_for_game = "X"
+input_text = ""  # for IP entry when joining
 
 
 # --- Utility Functions ---
@@ -136,25 +137,99 @@ def symbol_select_menu():
     }
 
 
-def host_join_menu():
-    """Screen for joining a host by entering IP address."""
+def host_menu():
     import pygame_textinput
-    screen.fill(BG_COLOR)
-    draw_text_center("Join Game", title_font, TITLE_COLOR, screen, 100)
-    draw_text_center("Enter Host IP:", info_font, TEXT_COLOR, screen, 200)
 
     # --- Input box setup ---
-    textinput = pygame_textinput.TextInputVisualizer(font=button_font, cursor_color=(0, 0, 0))
+    textinput = pygame_textinput.TextInputVisualizer()
+    textinput.font_object = button_font
+    textinput.cursor_color = (0, 0, 0)
+    
+    clock = pygame.time.Clock()
+
+    while True:
+        screen.fill(BG_COLOR)
+        draw_text_center("Host Game", title_font, TITLE_COLOR, screen, 100)
+        draw_text_center("Enter your name:", info_font, TEXT_COLOR, screen, 200)
+
+        events = pygame.event.get()
+        mouse_pos = pygame.mouse.get_pos()
+        
+        for event in events:
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_RETURN and textinput.value.strip():
+                    # Start hosting with the entered username
+                    username = textinput.value.strip()
+                    play_online(is_host=True, username=username, game_settings=game_settings)
+                    return
+                elif event.key == pygame.K_ESCAPE:
+                    return  # Go back to menu
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                # Check button clicks
+                if back_btn.collidepoint(mouse_pos):
+                    return  # Go back to main menu
+                elif host_btn.collidepoint(mouse_pos):
+                    if textinput.value.strip():
+                        # Start hosting
+                        username = textinput.value.strip()
+                        return username
+
+        # Update text input
+        textinput.update(events)
+
+        # Draw text input box
+        input_rect = pygame.Rect(200, 250, 400, 50)
+        pygame.draw.rect(screen, (255, 255, 255), input_rect)
+        pygame.draw.rect(screen, (100, 100, 100), input_rect, 2)
+        screen.blit(textinput.surface, (input_rect.x + 10, input_rect.y + 10))
+
+        # Draw buttons
+        back_btn = draw_button("Back", 480)
+        host_btn = draw_button("Host", 400)
+        
+        # Disable host button if name is empty
+        if not textinput.value.strip():
+            # Draw grayed out button
+            s = pygame.Surface((host_btn.width, host_btn.height))
+            s.set_alpha(128)
+            s.fill((200, 200, 200))
+            screen.blit(s, host_btn.topleft)
+
+        pygame.display.flip()
+        clock.tick(30)
+
+
+def host_join_menu():
+    """Screen for joining a host by entering IP address first, then username."""
+    import pygame_textinput
+    import pygame, sys
+
+    # --- Input box setup ---
+    ipinput = pygame_textinput.TextInputVisualizer()
+    ipinput.font_object = button_font
+    ipinput.cursor_color = (0, 0, 0)
+
+    nameinput = pygame_textinput.TextInputVisualizer()
+    nameinput.font_object = button_font
+    nameinput.cursor_color = (0, 0, 0)
+
     back_btn = draw_button("Back", 480)
     join_btn = draw_button("Connect", 400)
 
     clock = pygame.time.Clock()
+
     user_ip = ""
+    username = ""
+    current_input = "ip"  # track which field is active
 
     while True:
         screen.fill(BG_COLOR)
         draw_text_center("Join Game", title_font, TITLE_COLOR, screen, 100)
         draw_text_center("Enter Host IP:", info_font, TEXT_COLOR, screen, 200)
+        draw_text_center("Enter your name:", info_font, TEXT_COLOR, screen, 300)
 
         events = pygame.event.get()
         for event in events:
@@ -165,18 +240,40 @@ def host_join_menu():
                 if back_btn.collidepoint(event.pos):
                     return None  # Return to previous menu
                 elif join_btn.collidepoint(event.pos):
-                    return user_ip.strip()
+                    return user_ip.strip(), username.strip()
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_RETURN:
+                    # Press Enter to switch input field
+                    if current_input == "ip":
+                        current_input = "name"
+                    elif current_input == "name":
+                        return user_ip.strip(), username.strip()
 
-        textinput.update(events)
-        user_ip = textinput.value
-        screen.blit(textinput.surface, (WIDTH // 2 - 100, 280))
+        # Update active input box only
+        if current_input == "ip":
+            ipinput.update(events)
+        elif current_input == "name":
+            nameinput.update(events)
 
+        user_ip = ipinput.value
+        username = nameinput.value
+
+        # Render input boxes
+        screen.blit(ipinput.surface, (WIDTH // 2 - 100, 200))
+        screen.blit(nameinput.surface, (WIDTH // 2 - 100, 300))
+
+        # Draw buttons
         back_btn = draw_button("Back", 480)
         join_btn = draw_button("Connect", 400)
 
+        # Highlight current input box (optional visual cue)
+        if current_input == "ip":
+            pygame.draw.rect(screen, (0, 150, 255), (WIDTH // 2 - 110, 275, 220, 40), 2)
+        else:
+            pygame.draw.rect(screen, (0, 150, 255), (WIDTH // 2 - 110, 375, 220, 40), 2)
+
         pygame.display.flip()
         clock.tick(30)
-
 
 
 def settings_menu():
@@ -285,12 +382,14 @@ def run_menu(in_progress=False):
                         menu_state = "symbol_select"
                     elif buttons["host"].collidepoint(event.pos):
                         # Host game mode selected
-                        return ("host_online", "X"), settings  # Host always starts as X
+                        username = host_menu()
+                        if username:
+                            return ("host_online", username), settings  # Hosting player is X
                     elif buttons["join"].collidepoint(event.pos):
                         # Ask for IP
-                        ip = host_join_menu()
+                        ip, username = host_join_menu()
                         if ip:
-                            return ("join_online", "O", ip), settings  # Joining player is O
+                            return ("join_online", ip, username), settings  # Joining player is O
                     elif buttons["back"].collidepoint(event.pos):
                         menu_state = "main"
 

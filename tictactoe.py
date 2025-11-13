@@ -302,228 +302,6 @@ def play_sfx(sound_key, current_settings):
         sfx[sound_key].play()
 
 
-# --- Game loop ---
-def run_game(vs_ai=False, saved_state=None, difficult=0, human_symbol="X", game_settings=None):
-    global board, current_player, game_over, popup_active, pause_active, winner, ai_is_thinking, HUMAN_PLAYER, AI_PLAYER
-    
-    # Determine the AI player symbol based on the human choice
-    AI_PLAYER = "O" if human_symbol == "X" else "X"
-    HUMAN_PLAYER = human_symbol
-    start_symbol = "X"
-    
-    # --- Initialization ---
-    if saved_state:
-        # Load state
-        board = saved_state["board"]
-        current_player = saved_state["current_player"]
-        players.update(saved_state["players"])
-        game_over = saved_state["game_over"]
-        popup_active = False
-        pause_active = False
-        winner = None
-        
-        # Reset symbols and names based on saved state for display
-        players[AI_PLAYER]["name"] = "Computer" if vs_ai else ("Player 1" if AI_PLAYER == "X" else "Player 2")
-        players[HUMAN_PLAYER]["name"] = "Player"
-        
-    else:
-        # New Game setup
-        board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
-        game_over = False
-        popup_active = False
-        pause_active = False
-        winner = None
-        players["X"]["time_left"] = 300
-        players["O"]["time_left"] = 300
-        
-        # Set initial current player based on standard rules (X goes first)
-        current_player = start_symbol 
-        if vs_ai:
-            players[AI_PLAYER]["name"] = "Computer"
-            players[HUMAN_PLAYER]["name"] = "Player"
-        else:
-            # PvP mode names
-            if human_symbol == "X":
-                players["X"]["name"] = f"Player 1 (X)"
-                players["O"]["name"] = "Player 2 (O)"
-            else:
-                players["X"]["name"] = f"Player 2 (X)"
-                players["O"]["name"] = "Player 1 (O)"
-
-    # --- Start BGM when game starts/resumes --- 👈 NEW
-    if game_settings["music"]:
-        toggle_music(game_settings)
-        
-    clock = pygame.time.Clock()
-    running = True
-    ai_should_move = False 
-
-    # If the AI player (O or X) is supposed to move first
-    if vs_ai and current_player == AI_PLAYER:
-        ai_should_move = True
-        
-    last_tick_time = pygame.time.get_ticks()
-
-    while running:
-        # --- Time Calculation (60 FPS tick) ---
-        current_time = pygame.time.get_ticks()
-        time_elapsed = (current_time - last_tick_time) / 1000.0 # Time elapsed in seconds
-        last_tick_time = current_time
-
-        if pause_active or popup_active:
-            if pygame.mixer.music.get_busy():
-                pygame.mixer.music.pause()
-        elif not pygame.mixer.music.get_busy() and game_settings.get("music", True):
-            pygame.mixer.music.unpause()
-        
-        # --- Timer Logic ---
-        if not game_over and not popup_active and not pause_active and not ai_is_thinking:
-            # Only tick down if the current player is NOT the AI (or if it's PVP)
-            if current_player == HUMAN_PLAYER or not vs_ai:
-                current_time_left = players[current_player]["time_left"]
-                if current_time_left > 0:
-                    players[current_player]["time_left"] = max(0, current_time_left - time_elapsed)
-                else:
-                    # Player runs out of time - opponent wins
-                    game_over = True
-                    popup_active = True
-                    winner = AI_PLAYER if vs_ai else ("O" if current_player == "X" else "X")
-                    players[winner]["points"] += 1
-
-        # --- Drawing and UI Updates ---            
-        mouse_pos = pygame.mouse.get_pos()
-        hover_cell = None
-        if SIDE_PANEL_WIDTH < mouse_pos[0] < SIDE_PANEL_WIDTH + BOARD_PIXEL and mouse_pos[1] > TOP_UI_HEIGHT:
-            hover_cell = ((mouse_pos[0] - SIDE_PANEL_WIDTH) // CELL_SIZE,
-                          (mouse_pos[1] - TOP_UI_HEIGHT) // CELL_SIZE)
-
-        screen.fill(BG_COLOR)
-        pause_rect, exit_rect = draw_top_ui(mouse_pos)
-        # Player 1 is the human player in AI mode, or 'X' in PvP mode (from menu choice)
-        player_1_symbol = human_symbol
-        
-        # Player 2 is the opponent
-        player_2_symbol = "O" if player_1_symbol == "X" else "X"
-        
-        # Draw Player 1 (the human who chose the symbol) on the left panel
-        draw_player_panel("left", player_1_symbol)
-        
-        # Draw Player 2 (the opponent) on the right panel
-        draw_player_panel("right", player_2_symbol)
-        
-        draw_board(hover_cell)
-
-        if popup_active:
-            continue_rect = show_popup(winner)
-        elif pause_active:
-            cont_rect, menu_rect = show_pause_popup()
-
-        # --- AI TURN ---
-        if vs_ai and ai_should_move and not game_over:
-            ai_is_thinking = True
-            pygame.display.flip()
-            pygame.time.wait(200)
-            
-            clear_eval_cache()
-            
-            # AI_PLAYER is now dynamic (X or O)
-            move = ai_move(difficulty=difficult)
-            ai_is_thinking = False
-            
-            if move:
-                x, y = move
-                board[y][x] = AI_PLAYER # Use AI_PLAYER for move placement
-                if check_win(x, y, AI_PLAYER): # Use AI_PLAYER for win check
-                    players[AI_PLAYER]["points"] += 1
-                    game_over = True
-                    popup_active = True
-                    winner = AI_PLAYER
-                else:
-                    current_player = HUMAN_PLAYER # Switch to human player
-            ai_should_move = False      # Reset flag
-
-        # --- Event Handling ---
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                stop_music() # Stop music before quitting
-                pygame.quit()
-                sys.exit()
-
-            if popup_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if continue_rect.collidepoint(event.pos):
-                    # Reset board for next round
-                    board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
-                    game_over = False
-                    popup_active = False
-                    winner = None
-                    
-                    # --- NEW: Symbol Swap Logic for PvP ---
-                    if not vs_ai:
-                        # If the previous round started with 'X', the next round starts with 'O'
-                        # and vice versa. We swap the symbol that goes first.
-                        start_symbol = "O" if start_symbol == "X" else "X"
-                        current_player = start_symbol
-                    else:
-                        # In AI mode, 'X' always starts the next round (or whoever is HUMAN_PLAYER)
-                        current_player = HUMAN_PLAYER
-
-            elif pause_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if cont_rect.collidepoint(event.pos):
-                    pause_active = False
-                elif menu_rect.collidepoint(event.pos):
-                    stop_music() # Stop music when going back to main menu
-                    saved_state = {
-                        "board": [row[:] for row in board],
-                        "current_player": current_player,
-                        "players": {p: data.copy() for p, data in players.items()},
-                        "game_over": game_over,
-                    }
-                    return ("menu", saved_state)
-
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if pause_rect.collidepoint(event.pos):
-                    pause_active = True
-                elif exit_rect.collidepoint(event.pos):
-                    pygame.quit()
-                    sys.exit()
-                elif not game_over and not popup_active and not pause_active and hover_cell:
-                    x, y = hover_cell
-                    
-                    if board[y][x] == " ":
-                        player_symbol = current_player
-                        
-                        # Check if it's the human's turn (either human vs AI, or any turn in PvP)
-                        is_human_turn = not vs_ai or (vs_ai and current_player == HUMAN_PLAYER)
-                        
-                        if is_human_turn:
-                            
-                            board[y][x] = player_symbol
-
-                            # Play sound on successful move
-                            play_sfx("place", game_settings) # 👈 SFX: PLACE
-                            
-                            if check_win(x, y, player_symbol):
-                                players[player_symbol]["points"] += 1
-                                game_over = True
-                                popup_active = True
-                                winner = player_symbol
-                                play_sfx("win", game_settings) # 👈 SFX: WIN
-                            else:
-                                # Switch turn
-                                if player_symbol == "X":
-                                    current_player = "O"
-                                elif player_symbol == "O":
-                                    current_player = "X"
-                                    
-                                if vs_ai and current_player == AI_PLAYER:
-                                    ai_should_move = True  # Defer AI turn for AI mode
-                                    
-                            pygame.display.flip()
-
-        pygame.display.flip()
-        clock.tick(60)
-
-
 def run_game_ai(saved_state=None, difficult=0, human_symbol="X", game_settings=None):
     """
     Play vs AI. human_symbol is "X" or "O". game_settings is a dict { 'sfx': bool, 'music': bool }.
@@ -853,6 +631,356 @@ def run_game_pvp(saved_state=None, human_symbol="X", game_settings=None):
         clock.tick(60)
 
 
+import pygame
+import sys
+import socket
+from network import NetworkGame
+
+
+def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
+    """
+    Play Gomoku online between two computers in the same local network.
+    - Host waits for connection (shows waiting screen)
+    - Client connects and starts once connected
+    """
+    import socket, threading, time
+    global board, current_player, game_over, popup_active, pause_active, winner
+
+    if game_settings is None:
+        game_settings = {"sfx": True, "music": True}
+
+    screen = pygame.display.get_surface()
+    clock = pygame.time.Clock()
+
+    def get_local_ip():
+        """Get LAN IP reliably even if gethostname() fails."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
+    # --- Setup network ---
+    if is_host and (host_ip is None):
+        host_ip = get_local_ip()
+
+    from network import NetworkGame
+    net = NetworkGame(is_host=is_host, host_ip=host_ip)
+
+    connected = False
+    opponent_name = None
+    name_received = False
+
+    def network_thread():
+        nonlocal connected
+        try:
+            net.start()
+            connected = True
+        except Exception as e:
+            print(f"[NETWORK THREAD ERROR] {e}")
+
+    def on_name_received(name):
+        nonlocal opponent_name, name_received
+        opponent_name = name
+        name_received = True
+        print(f"[NETWORK] Opponent's name: {opponent_name}")
+
+    net.name_callback = on_name_received
+
+    # Start networking in a background thread
+    t = threading.Thread(target=network_thread, daemon=True)
+    t.start()
+
+    # --- Waiting screen (host only) ---
+    if is_host:
+        waiting = True
+        font = pygame.font.SysFont("Arial", 36)
+        small_font = pygame.font.SysFont("Arial", 28)
+
+        while waiting:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    net.close()
+                    pygame.quit()
+                    sys.exit()
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    net.close()
+                    return
+
+            screen.fill((230, 240, 255))
+            text = font.render("Waiting for another player to join...", True, (0, 0, 0))
+            ip_text = small_font.render(f"Your IP: {host_ip}", True, (40, 40, 100))
+            cancel_text = small_font.render("Press ESC to cancel", True, (120, 120, 120))
+            
+            screen.blit(text, (100, 200))
+            screen.blit(ip_text, (100, 300))
+            screen.blit(cancel_text, (100, 400))
+            pygame.display.flip()
+
+            if connected or net.is_connected:
+                # ✅ Wait a moment for listener thread to start
+                time.sleep(0.5)
+                # Send your name to opponent
+                net.send_name(username)
+                waiting = False
+
+            clock.tick(30)
+
+    else:
+        # --- Client mode ---
+        font = pygame.font.SysFont("Arial", 36, bold=True)
+        small_font = pygame.font.SysFont("Arial", 24)
+        sent_name = False
+
+        while True:
+            screen.fill((230, 240, 255))
+            text = font.render(f"Connecting to host {host_ip}...", True, (40, 40, 100))
+            screen.blit(text, text.get_rect(center=(400, 260)))
+
+            cancel_text = small_font.render("Press ESC to cancel", True, (120, 120, 120))
+            screen.blit(cancel_text, cancel_text.get_rect(center=(400, 360)))
+            pygame.display.flip()
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    net.close()
+                    pygame.quit()
+                    sys.exit()
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    net.close()
+                    return
+
+            if (net.is_connected or connected) and not sent_name:
+                # ✅ Wait a moment for listener thread to start
+                time.sleep(0.5)
+                # Send your name to opponent
+                net.send_name(username)
+                sent_name = True
+                break
+
+            clock.tick(30)
+
+    # Wait a moment for name exchange
+    print("[GAME] Waiting for name exchange...")
+    wait_start = time.time()
+    while not name_received and (time.time() - wait_start < 3):  # Wait up to 3 seconds
+        time.sleep(0.1)
+    
+    if not name_received:
+        print("[GAME] Name exchange timeout, using default name")
+
+    # --- Connected! Start the online game ---
+    print("[GAME] Both players connected! Starting game...")
+    print(f"[GAME] Your name: {username}")
+    print(f"[GAME] Opponent's name: {opponent_name}")
+    
+    # Initialize game state
+    board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+    current_player = "X"
+    start_symbol = "X"
+    game_over = False
+    popup_active = False
+    pause_active = False
+    winner = None
+    players["X"]["time_left"] = 300
+    players["O"]["time_left"] = 300
+
+    # music
+    if game_settings.get("music", True):
+        toggle_music(game_settings)
+
+    clock = pygame.time.Clock()
+    running = True
+    last_tick_time = pygame.time.get_ticks()
+    
+    # Decide which player is X and O
+    if is_host:
+        my_symbol = "X"
+        opponent_symbol = "O"
+    else:
+        my_symbol = "O"
+        opponent_symbol = "X"
+
+    # Set display names
+    players["X"]["name"] = f"{username} (X)" if my_symbol == "X" else f"{opponent_name} (X)"
+    players["O"]["name"] = f"{username} (O)" if my_symbol == "O" else f"{opponent_name} (O)"
+    
+    print(f"[GAME] You are player: {my_symbol}")
+    
+    # music
+    if game_settings.get("music", True):
+        toggle_music(game_settings)
+
+    clock = pygame.time.Clock()
+    running = True
+    last_tick_time = pygame.time.get_ticks()
+
+    # Track if it's my turn
+    my_turn = (my_symbol == "X")  # X always goes first
+    
+    def on_move_received(move):
+        """Callback when opponent moves."""
+        global current_player, game_over, winner, popup_active  # Keep these as global
+        nonlocal my_turn  # Only my_turn is nonlocal
+        try:
+            x, y = move["x"], move["y"]
+            
+            if board[y][x] != ' ':
+                print(f"[ERROR] Opponent tried invalid move at ({x}, {y})")
+                return
+            
+            board[y][x] = opponent_symbol
+            play_sfx("place", game_settings)
+            print(f"[GAME] Opponent placed {opponent_symbol} at ({x}, {y})")
+            
+            if check_win(x, y, opponent_symbol):
+                game_over = True
+                popup_active = True
+                winner = opponent_symbol
+                print(f"[GAME] {opponent_symbol} wins!")
+                players[current_player]["points"] += 1
+                if game_settings.get("sfx", True):
+                    play_sfx("win", game_settings)
+            else:
+                current_player = my_symbol
+                my_turn = True
+                print(f"[GAME] Now it's your turn! my_turn={my_turn}")
+                
+        except Exception as e:
+            print(f"[MOVE RECEIVED ERROR] {e}")
+            import traceback
+            traceback.print_exc()
+
+    net.callback = on_move_received
+
+    # --- Main online game loop ---
+    running = True
+    
+    while running:
+        # --- Time delta ---
+        now = pygame.time.get_ticks()
+        dt = (now - last_tick_time) / 1000.0
+        last_tick_time = now
+
+        # pause/unpause music
+        if pause_active or popup_active:
+            if pygame.mixer.music.get_busy():
+                pygame.mixer.music.pause()
+        elif game_settings.get("music", True) and not pygame.mixer.music.get_busy():
+            pygame.mixer.music.unpause()
+
+        # --- Timer countdown for current player ---
+        if not game_over and not popup_active and not pause_active:
+            if current_player in players:
+                players[current_player]["time_left"] = max(0, players[current_player]["time_left"] - dt)
+                if players[current_player]["time_left"] <= 0:
+                    game_over = True
+                    popup_active = True
+                    winner = "O" if current_player == "X" else "X"
+                    players[winner]["points"] += 1
+
+        # --- Draw UI ---
+        mouse_pos = pygame.mouse.get_pos()
+        hover_cell = None
+        if SIDE_PANEL_WIDTH < mouse_pos[0] < SIDE_PANEL_WIDTH + BOARD_PIXEL and mouse_pos[1] > TOP_UI_HEIGHT:
+            hover_cell = ((mouse_pos[0] - SIDE_PANEL_WIDTH) // CELL_SIZE,
+                          (mouse_pos[1] - TOP_UI_HEIGHT) // CELL_SIZE)
+
+        screen.fill(BG_COLOR)
+        pause_rect, exit_rect = draw_top_ui(mouse_pos)
+        # left panel shows the player assigned to human_symbol for clarity
+        draw_player_panel("left", "X")
+        draw_player_panel("right", "O")
+        draw_board(hover_cell)
+
+        if popup_active:
+            continue_rect = show_popup(winner)
+        elif pause_active:
+            cont_rect, menu_rect = show_pause_popup()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                net.close()
+                pygame.quit()
+                sys.exit()
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                net.close()
+                return
+
+            if popup_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if continue_rect.collidepoint(event.pos):
+                    board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+                    start_symbol = "O" if start_symbol == "X" else "X"
+                    current_player = start_symbol
+                    my_turn = (my_symbol == current_player)
+                    game_over = False
+                    popup_active = False
+                    winner = None
+                    players["X"]["time_left"] = 300
+                    players["O"]["time_left"] = 300
+
+            elif pause_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if cont_rect.collidepoint(event.pos):
+                    pause_active = False
+                elif menu_rect.collidepoint(event.pos):
+                    if game_settings.get("music", True):
+                        stop_music()
+                    saved_state = {
+                        "board": [row[:] for row in board],
+                        "current_player": current_player,
+                        "players": {p: data.copy() for p, data in players.items()},
+                        "game_over": game_over,
+                    }
+                    return ("menu", saved_state)
+                
+            elif event.type == pygame.MOUSEBUTTONDOWN and not game_over:
+                if my_turn and hover_cell is not None:
+                    x, y = hover_cell
+                    if board[y][x] == ' ':
+                        # Make the move
+                        board[y][x] = my_symbol
+                        if game_settings.get("sfx", True):
+                            play_sfx("place", game_settings)
+                        print(f"[GAME] You placed {my_symbol} at ({x}, {y})")
+                        
+                        # Send to opponent
+                        net.send_move(x, y)
+                        
+                        # Check win
+                        if check_win(x, y, my_symbol):
+                            players[current_player]["points"] += 1
+                            game_over = True
+                            popup_active = True
+                            winner = my_symbol
+                            if game_settings.get("sfx", True):
+                                play_sfx("win", game_settings)
+                            print(f"[GAME] You win!")
+                        else:
+                            current_player = opponent_symbol
+                            my_turn = False
+                            print(f"[GAME] Switched to opponent's turn. my_turn={my_turn}")
+                else:
+                    if not my_turn:
+                        print("[GAME] Not your turn!")
+        
+        # Draw connection status
+        small_font = pygame.font.SysFont("Arial", 18)
+        status_text = small_font.render(
+            f"Connected to {host_ip}" if not is_host else f"Hosting on {host_ip}",
+            True, (100, 100, 100)
+        )
+        screen.blit(status_text, (50, 50 - 30))
+
+        pygame.display.flip()
+        clock.tick(60)
+
+    net.close()
+    print("[GAME] Game ended, connection closed")
+
+
 # --- Entry Point ---
 if __name__ == "__main__":
     saved_state = None
@@ -908,16 +1036,39 @@ if __name__ == "__main__":
                     human_symbol=last_human_symbol,
                     game_settings=settings # 'X' or 'O' used to set Player 1/2 names correctly
                 )
+            
+            elif mode == "host_online":
+                last_vs_ai = False
+                last_human_symbol = "X"  # Host is always X
+                last_difficulty = 0
+                username = menu_choice[1]  # menu_choice is ("host_online", username)
+                
+                play_online(is_host=True, username=username, game_settings=settings)
+            
+            elif mode == "join_online":
+                last_vs_ai = False
+                last_human_symbol = "O"  # Client is always O
+                last_difficulty = 0
+                
+                host_ip = menu_choice[1]  # menu_choice is ("join_online", host_ip)
+                username = menu_choice[2]
+                play_online(is_host=False, host_ip=host_ip, username=username, game_settings=settings)
 
         elif menu_choice == "continue" and saved_state:
             # Use last settings if continuing a game (difficulty and vs_ai are already saved in state)
-            result = run_game(
-                vs_ai=last_vs_ai, 
-                saved_state=saved_state, 
-                human_symbol=last_human_symbol, # Important: pass the symbol back to correctly set names
-                difficult=last_difficulty,
-                game_settings=settings
-            )
+            if last_vs_ai:
+                result = run_game_ai(
+                    saved_state=saved_state, 
+                    difficult=last_difficulty,
+                    human_symbol=last_human_symbol,
+                    game_settings=settings
+                )
+            else:
+                result = run_game_pvp( 
+                    saved_state=saved_state, 
+                    human_symbol=last_human_symbol, # Important: pass the symbol back to correctly set names
+                    game_settings=settings
+                )
         else:
             break
 
