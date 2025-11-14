@@ -257,8 +257,31 @@ class NetworkGame:
                 return False
         return False
 
+    def send_continue(self):
+        """Send continue signal to opponent."""
+        if not self.is_connected:
+            print("[NETWORK] Cannot send continue - not connected")
+            return False
+            
+        if self.conn:
+            try:
+                msg = json.dumps({"type": "continue"}).encode()
+                self.conn.sendall(msg + b"\n")
+                print("[NETWORK] Sent continue signal")
+                return True
+            except Exception as e:
+                print(f"[NETWORK ERROR] Failed to send continue: {e}")
+                self.is_connected = False
+                return False
+        return False
+
     def _listen(self):
         """Continuously listen for incoming messages."""
+        print("[NETWORK] Listener thread starting...")
+        self.listener_ready = True
+        self._peer_ready = False
+        print("[NETWORK] ✓ Listener thread ready")
+        
         buffer = ""
         while self.running and self.is_connected:
             try:
@@ -266,33 +289,47 @@ class NetworkGame:
                 if not data:
                     print("[NETWORK] Connection closed by peer")
                     break
-                    
+                
+                print(f"[NETWORK] Received data: {data[:100]}")
                 buffer += data.decode()
+                
                 while "\n" in buffer:
                     msg, buffer = buffer.split("\n", 1)
+                    print(f"[NETWORK] Processing: {msg}")
                     try:
                         data = json.loads(msg)
                         msg_type = data.get("type", "move")
+                        print(f"[NETWORK] Message type: {msg_type}")
                         
-                        if msg_type == "name":
-                            # Handle name message
+                        if msg_type == "ready":
+                            self._peer_ready = True
+                            print("[NETWORK] ✓ Received READY signal from peer")
+                        
+                        elif msg_type == "name":
                             self.opponent_name = data.get("name", "Opponent")
-                            print(f"[NETWORK] Received opponent name: {self.opponent_name}")
+                            print(f"[NETWORK] ✓ Received opponent name: {self.opponent_name}")
                             if self.name_callback:
                                 self.name_callback(self.opponent_name)
                         
                         elif msg_type == "move":
-                            # Handle move message
                             if self.callback:
                                 self.callback({"x": data["x"], "y": data["y"]})
                         
+                        elif msg_type == "continue":  # ✅ NEW: Handle continue
+                            print("[NETWORK] ✓ Opponent pressed continue")
+                            if hasattr(self, 'continue_callback') and self.continue_callback:
+                                self.continue_callback()
+                        
                     except json.JSONDecodeError as e:
-                        print(f"[NETWORK] Invalid JSON received: {e}")
+                        print(f"[NETWORK] Invalid JSON: {e}")
+                        print(f"[NETWORK] Raw message: {msg}")
                         
             except socket.timeout:
                 continue
             except Exception as e:
                 print(f"[LISTEN ERROR] {e}")
+                import traceback
+                traceback.print_exc()
                 break
 
         self.is_connected = False

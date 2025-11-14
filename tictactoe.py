@@ -673,6 +673,11 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
     connected = False
     opponent_name = None
     name_received = False
+    
+    # ✅ NEW: Continue tracking
+    i_pressed_continue = False
+    opponent_pressed_continue = False
+    waiting_for_opponent = False
 
     def network_thread():
         nonlocal connected
@@ -687,8 +692,15 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
         opponent_name = name
         name_received = True
         print(f"[NETWORK] Opponent's name: {opponent_name}")
+    
+    # ✅ NEW: Continue callback
+    def on_continue_received():
+        nonlocal opponent_pressed_continue
+        opponent_pressed_continue = True
+        print("[GAME] Opponent pressed continue!")
 
     net.name_callback = on_name_received
+    net.continue_callback = on_continue_received  # ✅ Set continue callback
 
     # Start networking in a background thread
     t = threading.Thread(target=network_thread, daemon=True)
@@ -721,9 +733,7 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
             pygame.display.flip()
 
             if connected or net.is_connected:
-                # ✅ Wait a moment for listener thread to start
                 time.sleep(0.5)
-                # Send your name to opponent
                 net.send_name(username)
                 waiting = False
 
@@ -754,9 +764,7 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
                     return
 
             if (net.is_connected or connected) and not sent_name:
-                # ✅ Wait a moment for listener thread to start
                 time.sleep(0.5)
-                # Send your name to opponent
                 net.send_name(username)
                 sent_name = True
                 break
@@ -766,11 +774,12 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
     # Wait a moment for name exchange
     print("[GAME] Waiting for name exchange...")
     wait_start = time.time()
-    while not name_received and (time.time() - wait_start < 3):  # Wait up to 3 seconds
+    while not name_received and (time.time() - wait_start < 3):
         time.sleep(0.1)
     
     if not name_received:
         print("[GAME] Name exchange timeout, using default name")
+        opponent_name = "Opponent"
 
     # --- Connected! Start the online game ---
     print("[GAME] Both players connected! Starting game...")
@@ -809,22 +818,14 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
     players["O"]["name"] = f"{username} (O)" if my_symbol == "O" else f"{opponent_name} (O)"
     
     print(f"[GAME] You are player: {my_symbol}")
-    
-    # music
-    if game_settings.get("music", True):
-        toggle_music(game_settings)
-
-    clock = pygame.time.Clock()
-    running = True
-    last_tick_time = pygame.time.get_ticks()
 
     # Track if it's my turn
     my_turn = (my_symbol == "X")  # X always goes first
     
     def on_move_received(move):
         """Callback when opponent moves."""
-        global current_player, game_over, winner, popup_active  # Keep these as global
-        nonlocal my_turn  # Only my_turn is nonlocal
+        global current_player, game_over, winner, popup_active
+        nonlocal my_turn
         try:
             x, y = move["x"], move["y"]
             
@@ -841,7 +842,7 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
                 popup_active = True
                 winner = opponent_symbol
                 print(f"[GAME] {opponent_symbol} wins!")
-                players[current_player]["points"] += 1
+                players[opponent_symbol]["points"] += 1
                 if game_settings.get("sfx", True):
                     play_sfx("win", game_settings)
             else:
@@ -891,13 +892,28 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
 
         screen.fill(BG_COLOR)
         pause_rect, exit_rect = draw_top_ui(mouse_pos)
-        # left panel shows the player assigned to human_symbol for clarity
         draw_player_panel("left", "X")
         draw_player_panel("right", "O")
         draw_board(hover_cell)
 
         if popup_active:
             continue_rect = show_popup(winner)
+            
+            # ✅ NEW: Show waiting message if player pressed continue
+            if waiting_for_opponent:
+                waiting_font = pygame.font.SysFont("Arial", 28, bold=True)
+                waiting_text = waiting_font.render("Waiting for opponent...", True, (50, 50, 150))
+                waiting_rect = waiting_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 120))
+                
+                # Draw semi-transparent background for text
+                bg_rect = waiting_rect.inflate(40, 20)
+                s = pygame.Surface((bg_rect.width, bg_rect.height))
+                s.set_alpha(200)
+                s.fill((255, 255, 255))
+                screen.blit(s, bg_rect.topleft)
+                
+                screen.blit(waiting_text, waiting_rect)
+                
         elif pause_active:
             cont_rect, menu_rect = show_pause_popup()
 
@@ -912,15 +928,34 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
 
             if popup_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if continue_rect.collidepoint(event.pos):
-                    board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
-                    start_symbol = "O" if start_symbol == "X" else "X"
-                    current_player = start_symbol
-                    my_turn = (my_symbol == current_player)
-                    game_over = False
-                    popup_active = False
-                    winner = None
-                    players["X"]["time_left"] = 300
-                    players["O"]["time_left"] = 300
+                    # ✅ NEW: Handle synchronized continue
+                    if not i_pressed_continue:
+                        i_pressed_continue = True
+                        waiting_for_opponent = True
+                        net.send_continue()
+                        print("[GAME] You pressed continue, waiting for opponent...")
+                        
+                        # Check if opponent already pressed
+                        if opponent_pressed_continue:
+                            print("[GAME] Both players ready, restarting game...")
+                            # Reset game
+                            board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+                            start_symbol = "O" if start_symbol == "X" else "X"
+                            current_player = start_symbol
+                            my_turn = (my_symbol == current_player)
+                            game_over = False
+                            popup_active = False
+                            winner = None
+                            players["X"]["time_left"] = 300
+                            players["O"]["time_left"] = 300
+                            i_pressed_continue = False
+                            opponent_pressed_continue = False
+                            waiting_for_opponent = False
+                elif exit_rect.collidepoint(event.pos):
+                    if game_settings.get("music", True):
+                        stop_music()
+                    pygame.quit()
+                    sys.exit()
 
             elif pause_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if cont_rect.collidepoint(event.pos):
@@ -934,6 +969,7 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
                         "players": {p: data.copy() for p, data in players.items()},
                         "game_over": game_over,
                     }
+                    net.close()
                     return ("menu", saved_state)
                 
             elif event.type == pygame.MOUSEBUTTONDOWN and not game_over:
@@ -962,9 +998,33 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
                             current_player = opponent_symbol
                             my_turn = False
                             print(f"[GAME] Switched to opponent's turn. my_turn={my_turn}")
+                elif pause_rect.collidepoint(event.pos):
+                    pause_active = True
+                elif exit_rect.collidepoint(event.pos):
+                    if game_settings.get("music", True):
+                        stop_music()
+                    pygame.quit()
+                    sys.exit()
                 else:
                     if not my_turn:
                         print("[GAME] Not your turn!")
+        
+        # ✅ NEW: Check if opponent pressed continue while we're waiting
+        if waiting_for_opponent and opponent_pressed_continue:
+            print("[GAME] Both players ready, restarting game...")
+            # Reset game
+            board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+            start_symbol = "O" if start_symbol == "X" else "X"
+            current_player = start_symbol
+            my_turn = (my_symbol == current_player)
+            game_over = False
+            popup_active = False
+            winner = None
+            players["X"]["time_left"] = 300
+            players["O"]["time_left"] = 300
+            i_pressed_continue = False
+            opponent_pressed_continue = False
+            waiting_for_opponent = False
         
         # Draw connection status
         small_font = pygame.font.SysFont("Arial", 18)
@@ -972,7 +1032,7 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
             f"Connected to {host_ip}" if not is_host else f"Hosting on {host_ip}",
             True, (100, 100, 100)
         )
-        screen.blit(status_text, (50, 50 - 30))
+        screen.blit(status_text, (30, WINDOW_HEIGHT - 30))
 
         pygame.display.flip()
         clock.tick(60)

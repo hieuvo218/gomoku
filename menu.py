@@ -258,19 +258,28 @@ def host_join_menu():
         user_ip = ipinput.value
         username = nameinput.value
 
-        # Render input boxes
-        screen.blit(ipinput.surface, (WIDTH // 2 - 100, 200))
-        screen.blit(nameinput.surface, (WIDTH // 2 - 100, 300))
+        # Draw text input box
+        inputip_rect = pygame.Rect(200, 220, 400, 50)
+        pygame.draw.rect(screen, (255, 255, 255), inputip_rect)
+        pygame.draw.rect(screen, (100, 100, 100), inputip_rect, 2)
+        screen.blit(ipinput.surface, (inputip_rect.x + 10, inputip_rect.y + 10))
+
+        inputname_rect = pygame.Rect(200, 320, 400, 50)
+        pygame.draw.rect(screen, (255, 255, 255), inputname_rect)
+        pygame.draw.rect(screen, (100, 100, 100), inputname_rect, 2)
+        screen.blit(nameinput.surface, (inputname_rect.x + 10, inputname_rect.y + 10))
 
         # Draw buttons
         back_btn = draw_button("Back", 480)
         join_btn = draw_button("Connect", 400)
 
-        # Highlight current input box (optional visual cue)
-        if current_input == "ip":
-            pygame.draw.rect(screen, (0, 150, 255), (WIDTH // 2 - 110, 275, 220, 40), 2)
-        else:
-            pygame.draw.rect(screen, (0, 150, 255), (WIDTH // 2 - 110, 375, 220, 40), 2)
+        # Disable host button if name is empty
+        if not ipinput.value.strip() or not nameinput.value.strip():
+            # Draw grayed out button
+            s = pygame.Surface((join_btn.width, join_btn.height))
+            s.set_alpha(128)
+            s.fill((200, 200, 200))
+            screen.blit(s, join_btn.topleft)
 
         pygame.display.flip()
         clock.tick(30)
