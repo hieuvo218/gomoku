@@ -16,9 +16,12 @@ class NetworkGame:
         self.running = True
         self.listener_thread = None
         self.callback = None
-        self.is_connected = False
         self.name_callback = None
+        self.continue_callback = None
+        self.disconnect_callback = None  # ✅ NEW: Disconnect callback
+        self.is_connected = False
         self.opponent_name = None
+        self.listener_ready = False
         
         self._validate_network_params()
     
@@ -288,6 +291,9 @@ class NetworkGame:
                 data = self.conn.recv(1024)
                 if not data:
                     print("[NETWORK] Connection closed by peer")
+                    self.is_connected = False  # ✅ Set flag BEFORE callback
+                    if self.disconnect_callback:
+                        self.disconnect_callback("opponent_disconnected")
                     break
                 
                 print(f"[NETWORK] Received data: {data[:100]}")
@@ -315,10 +321,18 @@ class NetworkGame:
                             if self.callback:
                                 self.callback({"x": data["x"], "y": data["y"]})
                         
-                        elif msg_type == "continue":  # ✅ NEW: Handle continue
+                        elif msg_type == "continue":
                             print("[NETWORK] ✓ Opponent pressed continue")
-                            if hasattr(self, 'continue_callback') and self.continue_callback:
+                            if self.continue_callback:
                                 self.continue_callback()
+                        
+                        elif msg_type == "disconnect":
+                            reason = data.get("reason", "unknown")
+                            print(f"[NETWORK] Opponent sent disconnect: {reason}")
+                            self.is_connected = False  # ✅ Set flag BEFORE callback
+                            if self.disconnect_callback:
+                                self.disconnect_callback(reason)
+                            return
                         
                     except json.JSONDecodeError as e:
                         print(f"[NETWORK] Invalid JSON: {e}")
@@ -326,30 +340,79 @@ class NetworkGame:
                         
             except socket.timeout:
                 continue
+            except ConnectionResetError:
+                print("[NETWORK] Connection reset by peer")
+                self.is_connected = False  # ✅ Set flag BEFORE callback
+                if self.disconnect_callback:
+                    self.disconnect_callback("connection_reset")
+                break
+            except ConnectionAbortedError:
+                print("[NETWORK] Connection aborted")
+                self.is_connected = False  # ✅ Set flag BEFORE callback
+                if self.disconnect_callback:
+                    self.disconnect_callback("connection_aborted")
+                break
+            except OSError as e:
+                # Handle WinError 10054 and similar
+                if e.winerror in (10054, 10053, 10038):  # Connection closed errors
+                    print(f"[NETWORK] Connection closed (WinError {e.winerror})")
+                    self.is_connected = False  # ✅ Set flag BEFORE callback
+                    if self.disconnect_callback:
+                        self.disconnect_callback("connection_closed")
+                    break
+                else:
+                    print(f"[LISTEN ERROR] OSError: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    self.is_connected = False
+                    if self.disconnect_callback:
+                        self.disconnect_callback("error")
+                    break
             except Exception as e:
                 print(f"[LISTEN ERROR] {e}")
                 import traceback
                 traceback.print_exc()
+                self.is_connected = False  # ✅ Set flag BEFORE callback
+                if self.disconnect_callback:
+                    self.disconnect_callback("error")
                 break
 
         self.is_connected = False
         print("[NETWORK] Listener thread stopped")
 
+    def send_disconnect(self, reason="quit"):
+        """Send disconnect notification to opponent."""
+        if self.conn and self.is_connected:  # ✅ Check if still connected
+            try:
+                msg = json.dumps({"type": "disconnect", "reason": reason}).encode()
+                self.conn.sendall(msg + b"\n")
+                print(f"[NETWORK] Sent disconnect notification: {reason}")
+                time.sleep(0.1)  # Give time for message to send
+            except Exception as e:
+                print(f"[NETWORK] Could not send disconnect (connection already closed): {e}")
+        else:
+            print("[NETWORK] Skip sending disconnect - already disconnected")
+
     def close(self):
         """Close the network connection."""
         print("[NETWORK] Closing connection...")
+        
+        # Only try to send disconnect if we're still connected
+        if self.is_connected:
+            self.send_disconnect("quit")
+        
         self.running = False
         self.is_connected = False
         
         if self.conn:
             try:
                 self.conn.shutdown(socket.SHUT_RDWR)
-            except:
-                pass
+            except Exception as e:
+                print(f"[NETWORK] Shutdown error (expected if already closed): {e}")
             try:
                 self.conn.close()
-            except:
-                pass
+            except Exception as e:
+                print(f"[NETWORK] Close error: {e}")
         
         if self.listener_thread and self.listener_thread.is_alive():
             self.listener_thread.join(timeout=2)
