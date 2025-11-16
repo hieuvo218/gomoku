@@ -674,10 +674,16 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
     opponent_name = None
     name_received = False
     
-    # ✅ NEW: Continue tracking
+    # Continue tracking
     i_pressed_continue = False
     opponent_pressed_continue = False
     waiting_for_opponent = False
+
+    # Disconnect tracking
+    opponent_disconnected = False
+    disconnect_reason = ""
+    disconnect_time = None
+    auto_return_delay = 15.0
 
     def network_thread():
         nonlocal connected
@@ -693,14 +699,23 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
         name_received = True
         print(f"[NETWORK] Opponent's name: {opponent_name}")
     
-    # ✅ NEW: Continue callback
+    # Continue callback
     def on_continue_received():
         nonlocal opponent_pressed_continue
         opponent_pressed_continue = True
         print("[GAME] Opponent pressed continue!")
 
+    # Disconnect callback
+    def on_disconnect(reason):
+        nonlocal opponent_disconnected, disconnect_reason, disconnect_time
+        opponent_disconnected = True
+        disconnect_reason = reason
+        disconnect_time = time.time()
+        print(f"[NETWORK] Disconnected: {reason}")
+
     net.name_callback = on_name_received
-    net.continue_callback = on_continue_received  # ✅ Set continue callback
+    net.continue_callback = on_continue_received  
+    net.disconnect_callback = on_disconnect
 
     # Start networking in a background thread
     t = threading.Thread(target=network_thread, daemon=True)
@@ -861,20 +876,28 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
     running = True
     
     while running:
+        # Check for disconnection
+        if opponent_disconnected and disconnect_time:
+            elapsed = time.time() - disconnect_time
+            if elapsed >= auto_return_delay:
+                print("[GAME] Opponent disconnected, returning to menu.")
+                net.close()
+                return ("menu", None)
+
         # --- Time delta ---
         now = pygame.time.get_ticks()
         dt = (now - last_tick_time) / 1000.0
         last_tick_time = now
 
         # pause/unpause music
-        if pause_active or popup_active:
+        if pause_active or popup_active or opponent_disconnected:
             if pygame.mixer.music.get_busy():
                 pygame.mixer.music.pause()
         elif game_settings.get("music", True) and not pygame.mixer.music.get_busy():
             pygame.mixer.music.unpause()
 
         # --- Timer countdown for current player ---
-        if not game_over and not popup_active and not pause_active:
+        if not game_over and not popup_active and not pause_active and not opponent_disconnected:
             if current_player in players:
                 players[current_player]["time_left"] = max(0, players[current_player]["time_left"] - dt)
                 if players[current_player]["time_left"] <= 0:
@@ -886,9 +909,10 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
         # --- Draw UI ---
         mouse_pos = pygame.mouse.get_pos()
         hover_cell = None
-        if SIDE_PANEL_WIDTH < mouse_pos[0] < SIDE_PANEL_WIDTH + BOARD_PIXEL and mouse_pos[1] > TOP_UI_HEIGHT:
-            hover_cell = ((mouse_pos[0] - SIDE_PANEL_WIDTH) // CELL_SIZE,
-                          (mouse_pos[1] - TOP_UI_HEIGHT) // CELL_SIZE)
+        if not opponent_disconnected:
+            if SIDE_PANEL_WIDTH < mouse_pos[0] < SIDE_PANEL_WIDTH + BOARD_PIXEL and mouse_pos[1] > TOP_UI_HEIGHT:
+                hover_cell = ((mouse_pos[0] - SIDE_PANEL_WIDTH) // CELL_SIZE,
+                            (mouse_pos[1] - TOP_UI_HEIGHT) // CELL_SIZE)
 
         screen.fill(BG_COLOR)
         pause_rect, exit_rect = draw_top_ui(mouse_pos)
@@ -896,10 +920,10 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
         draw_player_panel("right", "O")
         draw_board(hover_cell)
 
-        if popup_active:
+        if popup_active and not opponent_disconnected:
             continue_rect = show_popup(winner)
             
-            # ✅ NEW: Show waiting message if player pressed continue
+            # Show waiting message if player pressed continue
             if waiting_for_opponent:
                 waiting_font = pygame.font.SysFont("Arial", 28, bold=True)
                 waiting_text = waiting_font.render("Waiting for opponent...", True, (50, 50, 150))
@@ -914,125 +938,195 @@ def play_online(is_host=False, host_ip=None, username=None, game_settings=None):
                 
                 screen.blit(waiting_text, waiting_rect)
                 
-        elif pause_active:
+        elif pause_active and not opponent_disconnected:
             cont_rect, menu_rect = show_pause_popup()
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
+                if net.is_connected:
+                    net.send_disconnect("quit")
                 net.close()
                 pygame.quit()
                 sys.exit()
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                net.close()
-                return
-
-            if popup_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if continue_rect.collidepoint(event.pos):
-                    # ✅ NEW: Handle synchronized continue
-                    if not i_pressed_continue:
-                        i_pressed_continue = True
-                        waiting_for_opponent = True
-                        net.send_continue()
-                        print("[GAME] You pressed continue, waiting for opponent...")
-                        
-                        # Check if opponent already pressed
-                        if opponent_pressed_continue:
-                            print("[GAME] Both players ready, restarting game...")
-                            # Reset game
-                            board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
-                            start_symbol = "O" if start_symbol == "X" else "X"
-                            current_player = start_symbol
-                            my_turn = (my_symbol == current_player)
-                            game_over = False
-                            popup_active = False
-                            winner = None
-                            players["X"]["time_left"] = 300
-                            players["O"]["time_left"] = 300
-                            i_pressed_continue = False
-                            opponent_pressed_continue = False
-                            waiting_for_opponent = False
-                elif exit_rect.collidepoint(event.pos):
-                    if game_settings.get("music", True):
-                        stop_music()
-                    pygame.quit()
-                    sys.exit()
-
-            elif pause_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if cont_rect.collidepoint(event.pos):
-                    pause_active = False
-                elif menu_rect.collidepoint(event.pos):
-                    if game_settings.get("music", True):
-                        stop_music()
-                    saved_state = {
-                        "board": [row[:] for row in board],
-                        "current_player": current_player,
-                        "players": {p: data.copy() for p, data in players.items()},
-                        "game_over": game_over,
-                    }
+                if opponent_disconnected:
+                    print("[GAME] ESC pressed, returning to menu.")
                     net.close()
-                    return ("menu", saved_state)
-                
-            elif event.type == pygame.MOUSEBUTTONDOWN and not game_over:
-                if my_turn and hover_cell is not None:
-                    x, y = hover_cell
-                    if board[y][x] == ' ':
-                        # Make the move
-                        board[y][x] = my_symbol
-                        if game_settings.get("sfx", True):
-                            play_sfx("place", game_settings)
-                        print(f"[GAME] You placed {my_symbol} at ({x}, {y})")
-                        
-                        # Send to opponent
-                        net.send_move(x, y)
-                        
-                        # Check win
-                        if check_win(x, y, my_symbol):
-                            players[current_player]["points"] += 1
-                            game_over = True
-                            popup_active = True
-                            winner = my_symbol
-                            if game_settings.get("sfx", True):
-                                play_sfx("win", game_settings)
-                            print(f"[GAME] You win!")
-                        else:
-                            current_player = opponent_symbol
-                            my_turn = False
-                            print(f"[GAME] Switched to opponent's turn. my_turn={my_turn}")
-                elif pause_rect.collidepoint(event.pos):
-                    pause_active = True
-                elif exit_rect.collidepoint(event.pos):
-                    if game_settings.get("music", True):
-                        stop_music()
-                    pygame.quit()
-                    sys.exit()
+                    return
                 else:
-                    if not my_turn:
-                        print("[GAME] Not your turn!")
+                    if net.is_connected:
+                        net.send_disconnect("exit_to_menu")
+                    net.close()
+                    return
+
+            if not opponent_disconnected:   
+                if popup_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if continue_rect.collidepoint(event.pos):
+                        # ✅ NEW: Handle synchronized continue
+                        if not i_pressed_continue:
+                            i_pressed_continue = True
+                            waiting_for_opponent = True
+                            net.send_continue()
+                            print("[GAME] You pressed continue, waiting for opponent...")
+                            
+                            # Check if opponent already pressed
+                            if opponent_pressed_continue:
+                                print("[GAME] Both players ready, restarting game...")
+                                # Reset game
+                                board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+                                start_symbol = "O" if start_symbol == "X" else "X"
+                                current_player = start_symbol
+                                my_turn = (my_symbol == current_player)
+                                game_over = False
+                                popup_active = False
+                                winner = None
+                                players["X"]["time_left"] = 300
+                                players["O"]["time_left"] = 300
+                                i_pressed_continue = False
+                                opponent_pressed_continue = False
+                                waiting_for_opponent = False
+                    elif exit_rect.collidepoint(event.pos):
+                        if game_settings.get("music", True):
+                            stop_music()
+                        pygame.quit()
+                        sys.exit()
+
+                elif pause_active and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if cont_rect.collidepoint(event.pos):
+                        pause_active = False
+                    elif menu_rect.collidepoint(event.pos):
+                        if game_settings.get("music", True):
+                            stop_music()
+                        if net.is_connected:
+                            net.send_disconnect("return_to_menu")
+                        net.close()
+                        saved_state = {
+                            "board": [row[:] for row in board],
+                            "current_player": current_player,
+                            "players": {p: data.copy() for p, data in players.items()},
+                            "game_over": game_over,
+                        }
+                        return ("menu", saved_state)
+                    
+                elif event.type == pygame.MOUSEBUTTONDOWN and not game_over:
+                    if my_turn and hover_cell is not None:
+                        x, y = hover_cell
+                        if board[y][x] == ' ':
+                            # Make the move
+                            board[y][x] = my_symbol
+                            if game_settings.get("sfx", True):
+                                play_sfx("place", game_settings)
+                            print(f"[GAME] You placed {my_symbol} at ({x}, {y})")
+                            
+                            # Send to opponent
+                            net.send_move(x, y)
+                            
+                            # Check win
+                            if check_win(x, y, my_symbol):
+                                players[current_player]["points"] += 1
+                                game_over = True
+                                popup_active = True
+                                winner = my_symbol
+                                if game_settings.get("sfx", True):
+                                    play_sfx("win", game_settings)
+                                print(f"[GAME] You win!")
+                            else:
+                                current_player = opponent_symbol
+                                my_turn = False
+                                print(f"[GAME] Switched to opponent's turn. my_turn={my_turn}")
+                    elif pause_rect.collidepoint(event.pos):
+                        pause_active = True
+                    elif exit_rect.collidepoint(event.pos):
+                        if game_settings.get("music", True):
+                            stop_music()
+                        pygame.quit()
+                        sys.exit()
+                    else:
+                        if not my_turn:
+                            print("[GAME] Not your turn!")
         
-        # ✅ NEW: Check if opponent pressed continue while we're waiting
-        if waiting_for_opponent and opponent_pressed_continue:
-            print("[GAME] Both players ready, restarting game...")
-            # Reset game
-            board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
-            start_symbol = "O" if start_symbol == "X" else "X"
-            current_player = start_symbol
-            my_turn = (my_symbol == current_player)
-            game_over = False
-            popup_active = False
-            winner = None
-            players["X"]["time_left"] = 300
-            players["O"]["time_left"] = 300
-            i_pressed_continue = False
-            opponent_pressed_continue = False
-            waiting_for_opponent = False
-        
-        # Draw connection status
-        small_font = pygame.font.SysFont("Arial", 18)
-        status_text = small_font.render(
-            f"Connected to {host_ip}" if not is_host else f"Hosting on {host_ip}",
-            True, (100, 100, 100)
-        )
-        screen.blit(status_text, (30, WINDOW_HEIGHT - 30))
+        # Check if opponent pressed continue while we're waiting
+        if not opponent_disconnected:
+            if waiting_for_opponent and opponent_pressed_continue:
+                print("[GAME] Both players ready, restarting game...")
+                # Reset game
+                board = [[" " for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+                start_symbol = "O" if start_symbol == "X" else "X"
+                current_player = start_symbol
+                my_turn = (my_symbol == current_player)
+                game_over = False
+                popup_active = False
+                winner = None
+                players["X"]["time_left"] = 300
+                players["O"]["time_left"] = 300
+                i_pressed_continue = False
+                opponent_pressed_continue = False
+                waiting_for_opponent = False
+
+        if opponent_disconnected:
+            # Draw semi-transparent overlay
+            overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+            overlay.set_alpha(200)
+            overlay.fill((0, 0, 0))
+            screen.blit(overlay, (0, 0))
+            
+            # Draw disconnect message
+            disconnect_font = pygame.font.SysFont("Arial", 44, bold=True)
+            medium_font = pygame.font.SysFont("Arial", 28)
+            small_font = pygame.font.SysFont("Arial", 22)
+            
+            disconnect_text = disconnect_font.render("Opponent Disconnected", True, (255, 100, 100))
+            disconnect_rect = disconnect_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 60))
+            
+            reason_messages = {
+                "quit": "Opponent quit the game",
+                "exit_to_menu": "Opponent returned to menu",
+                "return_to_menu": "Opponent returned to menu",
+                "connection_reset": "Connection lost",
+                "connection_aborted": "Connection aborted",
+                "connection_closed": "Connection closed",
+                "error": "Connection error",
+                "opponent_disconnected": "Opponent left the game"
+            }
+            reason_text = medium_font.render(
+                reason_messages.get(disconnect_reason, "Connection lost"),
+                True, (220, 220, 220)
+            )
+            reason_rect = reason_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
+            
+            # ✅ Calculate time remaining
+            if disconnect_time:
+                elapsed = time.time() - disconnect_time
+                remaining = max(0, auto_return_delay - elapsed)
+                
+                if remaining > 0:
+                    returning_text = medium_font.render(
+                        f"Returning to menu in {remaining:.1f}s...",
+                        True, (180, 180, 255)
+                    )
+                else:
+                    returning_text = medium_font.render(
+                        "Returning to menu...",
+                        True, (180, 180, 255)
+                    )
+                returning_rect = returning_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 60))
+            
+            instruction_text = small_font.render("Press ESC to return immediately", True, (150, 150, 150))
+            instruction_rect = instruction_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 110))
+            
+            screen.blit(disconnect_text, disconnect_rect)
+            screen.blit(reason_text, reason_rect)
+            if disconnect_time:
+                screen.blit(returning_text, returning_rect)
+            screen.blit(instruction_text, instruction_rect)
+        else:
+            # Draw connection status
+            small_font = pygame.font.SysFont("Arial", 18)
+            status_text = small_font.render(
+                f"Connected to {host_ip}" if not is_host else f"Hosting on {host_ip}",
+                True, (100, 100, 100)
+            )
+            screen.blit(status_text, (30, WINDOW_HEIGHT - 30))
 
         pygame.display.flip()
         clock.tick(60)
