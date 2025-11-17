@@ -4,8 +4,12 @@
 This is an implementation of the classic board game **Gomoku** (also known as *Five-in-a-Row* or *Gobang*), built using **Python** and **Pygame**.  
 It features both **Player vs. Player (PvP)** and challenging **Player vs. AI** modes with adjustable difficulty.
 
-## How to Run:
+## How to Run on a Computer:
 - Clone the repository then run the executable file located in folder dist.
+- Choose new game -> pvp/ai mode -> choose symbol.
+## How to Run on Local Network:
+- Clone the repository then run the executable file located in folder dist.
+- Choose new game -> host/join game -> Enter IP address.
 ---
 
 ## 🕹️ Game Rules
